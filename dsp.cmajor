@@ -1,0 +1,150 @@
+// -----------------------------------------------------------------------------
+// Artists in DSP - StereoWidenerDSPProcessor (Native Cmajor DSP Engine)
+// -----------------------------------------------------------------------------
+
+graph StereoWidenerDSPProcessor  [[ main ]]
+{
+    input stream float32<2> in;   // Synchroner Stereo-Audio-Eingang
+    output stream float32<2> out; // Synchroner Stereo-Audio-Ausgang
+
+    // Exakte Parameter-Zuordnungen laut Amorph v2 Preset Context Vorgabe
+    input value float32 param1  [[ name: "Param 1", min: 0.0, max: 1.0, init: 0.5, step: 0.01 ]];
+    input value float32 param2  [[ name: "Param 2", min: 20.0, max: 500.0, init: 100.0, step: 1.0 ]];
+    input value float32 param3  [[ name: "Param 3", min: 0.0, max: 1.0, init: 0.0, step: 1.0 ]];
+    input value float32 param4  [[ name: "Param 4", min: 0.0, max: 1.0, init: 1.0, step: 0.01 ]];
+
+    // Signalfluss-Verknüpfungen mit dem inneren Worker-Processor
+    node coreProcessor = StereoWidenerCoreEngine;
+
+    connection
+    {
+        in -> coreProcessor.in;
+        param1 -> coreProcessor.width;
+        param2 -> coreProcessor.lowCut;
+        param3 -> coreProcessor.monoCheck;
+        param4 -> coreProcessor.inputGain;
+        coreProcessor.out -> out;
+    }
+}
+
+// Innerer Core-Processor mit Stream-Zuweisungsoperator (<-)
+processor StereoWidenerCoreEngine
+{
+    input stream float32<2> in;
+    output stream float32<2> out;
+
+    input value float32 width;
+    input value float32 lowCut;
+    input value float32 monoCheck;
+    input value float32 inputGain;
+
+    // Filter-Zustand für Linkwitz-Riley Crossover (2-Pole Highpass)
+    struct FilterState
+    {
+        float32 x1, x2, y1, y2;
+    }
+    
+    FilterState hpL, hpR;
+    
+    // Allpass-Filter Zustand für die Mono-zu-Stereo Verbreiterung
+    float32 apStateR;
+
+    void init()
+    {
+        hpL.x1 = 0.0f; hpL.x2 = 0.0f; hpL.y1 = 0.0f; hpL.y2 = 0.0f;
+        hpR.x1 = 0.0f; hpR.x2 = 0.0f; hpR.y1 = 0.0f; hpR.y2 = 0.0f;
+        apStateR = 0.0f;
+    }
+
+    void main()
+    {
+        loop
+        {
+            // 1. Eingangssignale über Indizes aus dem Stereo-Vektor extrahieren.
+            //    Wichtig: Der ehemalige param4-Input-Gain wird hier absichtlich
+            //    NICHT mehr angewendet. Amorph kann diesen, von der Custom-UI
+            //    nicht bedienten Parameter beim Laden mit einem anderen Wert
+            //    initialisieren, was zu einem unerwünschten Pegelverlust führt.
+            //    Der Pfad bleibt damit bei 50 % Stereobreite exakt auf Unity.
+            float32 inL = in[0];
+            float32 inR = in[1];
+
+            // 2. Koeffizienten für Frequenzweiche berechnen (Globaler Funktionsaufruf)
+            float64 omega = 2.0 * float64(std::pi) * float64(lowCut) / processor.frequency;
+            float64 kappa = tan(omega / 2.0);
+            float64 a0 = 1.0 / (1.0 + sqrt(2.0) * kappa + kappa * kappa);
+            
+            float32 b0 = float32(a0);
+            float32 b1 = float32(-2.0 * a0);
+            float32 b2 = float32(a0);
+            float32 a1 = float32(2.0 * a0 * (kappa * kappa - 1.0));
+            float32 a2 = float32(a0 * (1.0 - sqrt(2.0) * kappa + kappa * kappa));
+
+            // 3. Filter pro Kanal anwenden (Hochpass-Anteil isolieren)
+            float32 hpOutL = (b0 * inL) + (b1 * hpL.x1) + (b2 * hpL.x2) - (a1 * hpL.y1) - (a2 * hpL.y2);
+            hpL.x2 = hpL.x1; hpL.x1 = inL; hpL.y2 = hpL.y1; hpL.y1 = hpOutL;
+
+            float32 hpOutR = (b0 * inR) + (b1 * hpR.x1) + (b2 * hpR.x2) - (a1 * hpR.y1) - (a2 * hpR.y2);
+            hpR.x2 = hpR.x1; hpR.x1 = inR; hpR.y2 = hpR.y1; hpR.y1 = hpOutR;
+
+            // Frequenzen unterhalb der Trennfrequenz abspalten
+            float32 lowL = inL - hpOutL;
+            float32 lowR = inR - hpOutR;
+
+            // 4. Mid/Side je Band. Der Bass wird gesondert berechnet, damit er
+            //    phasenstabil bleibt und bei 0 % mit dem Hochton zusammen nach
+            //    mono fällt, während er oberhalb von 50 % geschützt bleibt.
+            float32 loMid  = 0.5f * (lowL + lowR);
+            float32 loSide = 0.5f * (lowL - lowR);
+            float32 hiMid  = 0.5f * (hpOutL + hpOutR);
+            float32 hiSide = 0.5f * (hpOutL - hpOutR);
+
+            // 5. Breitungsgewinne: 0 % = mono (0), 50 % = Unity (1), 100 % = 2x.
+            //    Der Bass wird mit demselben Faktor eingezogen, fällt aber
+            //    oberhalb von 50 % nicht weiter auf (Bass-Schutz gegen
+            //    Phasendrehungen und Pegelverlust im Tiefton).
+            float32 hiGain = width * 2.0f;
+            float32 loGain = hiGain;
+            if (loGain > 1.0f)
+                loGain = 1.0f;
+
+            // 6. Mono-zu-Stereo: Oberhalb von 50 % wird ein aus dem Gesamt-Mid
+            //    abgeleitetes, allpass-gefiltertes Side-Signal addiert. Es wird
+            //    symmetrisch auf L (+side) und R (-side) verteilt, sodass es
+            //    bei einer Monosumme exakt herausfällt. Dadurch bleibt die
+            //    Monokompatibilität erhalten und es gibt keine Pegelauslöschung.
+            // Unterhalb von 50 % ist extraWidth negativ - hier darf die
+            // synthetische Breitung aber NICHT aktiv sein, sonst ist 0 %
+            // nicht mehr voll mono. Deshalb auf 0 klemmen.
+            float32 extraWidth = hiGain - 1.0f;   // -1 bei 0 %, 0 bei 50 %, 1 bei 100 %
+            if (extraWidth < 0.0f)
+                extraWidth = 0.0f;
+            float32 ap_g = 0.6f;
+            float32 fullMid = 0.5f * (inL + inR);
+            float32 ap_out = -ap_g * fullMid + apStateR;
+            apStateR = fullMid + (ap_g * ap_out);
+            float32 genSide = ap_out * extraWidth * 0.5f;
+
+            // 7. Gesamt-Side je Band = originaler Side * Breitung + synthetische
+            //    Mono-zu-Stereo-Breitung (nur im Hochton-Bereich).
+            float32 totalSide = loSide * loGain + (hiSide * hiGain + genSide);
+
+            // 8. Zurück nach L/R dekodieren (vollständiges Signal, mono-kompatibel)
+            float32 outL = (loMid + hiMid) + totalSide;
+            float32 outR = (loMid + hiMid) - totalSide;
+
+            // 9. Mono-Check Schalter einberechnen
+            if (monoCheck > 0.5f)
+            {
+                float32 monoSum = 0.5f * (outL + outR);
+                outL = monoSum;
+                outR = monoSum;
+            }
+
+            // 10. Stream-Zuweisungsoperator (<-) für den Stereo-Ausgang
+            out <- float32<2>(outL, outR);
+            
+            advance();
+        }
+    }
+}

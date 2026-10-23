@@ -1,0 +1,1 @@
+{"CmajorVersion": 1, "ID": "com.artistsindsp.amorph.workspace.stereowidener", "version": "0.1.0", "name": "stereowidener", "manufacturer": "Artists_in_DSP", "category": "effect", "isInstrument": false, "source": "dsp.cmajor", "view": {"src": "index.js", "width": 960, "height": 520, "resizable": true}, "resources": ["assets/**"]}

@@ -1,0 +1,68 @@
+BUG: cmaj render invertiert den R-Kanal des Eingang-WAV
+================================================================
+Stand: 24.10.2026 - stereowidener-Projekt
+Tool:  Cmajor Tools 1.0.3175 (cmaj.exe, Build Jul 10 2026)
+
+SYMPTOM
+----------------------------------------------------------------
+Bei `cmaj render <patch> --input=test.wav --output=out.wav` ist der
+rechte Kanal des RENDER-OUTPUTS phaseninvertiert, obwohl der Patch
+reines Passthrough-Verhalten hat.
+
+Nachgewiesen mit minimalem Test-Patch (out <- in):
+
+    inL:  0       -0.0288 -0.0575 -0.0860
+    inR:  0.5     0.4981  0.4926  0.4833
+    outL: 0       -0.0288 -0.0575 -0.0860   (= inL, korrekt)
+    outR: -0.5    -0.4981 -0.4926 -0.4833   (= -inR, INVERTIERT!)
+
+DIAGNOSE / EINORDNUNG
+----------------------------------------------------------------
+Mit dem Test out <- float32<2>(in[0], in[0]) (L in beide Kanäle)
+wurde die Inversion eingeordnet:
+
+    outL: 0 -0.0288 -0.0575 -0.0860
+    outR: 0 -0.0288 -0.0575 -0.0860   (NICHT invertiert)
+
+=> Die Inversion passiert NICHT beim Schreiben des Output-WAV,
+   sondern beim LESEN des Input-WAV: Das Render-Tool invertiert
+   intern den R-Kanal des Stereo-Eingangs (Quirk/Bug des
+   Offline-Renderers, vermutlich WAV-Reader).
+
+    Das eigentliche DSP des Patches ist NICHT betroffen.
+    Im echten VST3-Host bekommt der Processor korrekte Samples.
+
+FOLGE FÜR OFFLINE-VERIFIKATION
+----------------------------------------------------------------
+Beim Vergleich von Render-Output mit dem Original-Eingang muss
+berücksichtigt werden, dass das DSP (L' = inL, R' = -inR) "sieht".
+
+Richtige Referenzwerte für die Verifikation des stereowidener:
+  - Invarianz:    outL + outR  ==  inL - inR
+  - 0 % (mono):   outL == outR == 0.5*(inL - inR)
+  - 50 % (unity): outL == inL,  outR == -inR
+  - 100 %:        out-side = 0.5*(outL - outR) ca. 2x perceived-side
+
+Mit diesem Modell gemessen (Delay 20400 Samples, float32):
+  - 0 %:  outL vs outR  max = 0.000e+0  (voll mono)
+  - 50 %: outL vs inL   max = 1.5e-5, outR vs -inR max = 4.6e-5 (unity)
+  - 100 %: side-ratio = 2.046
+  - Invarianz-Residuum über alle Breiten: ~1.5e-5
+
+WICHTIG
+----------------------------------------------------------------
+- Keine Auswirkung auf den ausgelieferten VST3 (Host-Samples sind
+  korrekt).
+- Nur relevant, wenn Offline-Rendering mit cmaj zur Verifikation
+  genutzt wird.
+- Möglicher Upstream-Bug bei Cmajor (WAV-Input-Reader des
+  Render-Tools) - ggf. an Cmajor Software Ltd. melden.
+
+TESTDATEIEN (Reproduktion)
+----------------------------------------------------------------
+- C:\Users\Horyzen\AppData\Local\Temp\opencode\sw_test_in.wav
+  (48 kHz, 16 Bit, 2 s, L = 440 Hz, R = 660 Hz, Amplitude 0.5)
+- Minipatch: graph mit "out <- in;" bzw.
+  "out <- float32<2>(in[0], in[0]);" im Processor
+- Verifikations-Skripte: sw_verify_final.cjs, sw_pt_render.cjs,
+  sw_pt_l2lr.cjs (im selben Temp-Ordner)

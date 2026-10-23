@@ -1,0 +1,32 @@
+Bitte erstelle code für amorph_fx (https://gumroad.com/d/a1c20bf7a7238e7fb91235c8f632751b)
+Amorph hat 2 Code-Bereiche: DSP und UI
+
+DSP:
+
+Es soll ein Stereo-Widener Plugin im VST3 Format erstellt werden.
+Das Plugin soll sowohl ein Stereosignal stufenlos verbreitern, als auch ein Monosignal ein vollwertiges Stereosignal umwandeln. Es soll dabei die Mono-Kompatibilität beibehalten und sichergehen, dass das geweitete Signal in Phase bleibt, auch wenn es wieder in Mono umgewandelt wird.
+Es soll außerdem einen Low-Frequenz-Cut geben, die tiefe Frequenzen unter einem bestimmten Wert von der Verbreiterung ausschließen. Und es soll einen Mono-Button geben, mit dem die Monokompatibilität gecheckt werden kann.
+
+
+
+
+UI:
+Beschreibung der Benutzeroberfläche (GUI) des Audio-VST-Plugins **stereowidener** vom Hersteller **ClickTone** im modernen Dark-Mode-Design.
+
+* **Header (oben):**
+* Links oben steht der Markenname **ClickTone** in schlanker, dezenter Schriftart.
+* Daneben ist der Plugin-Name **stereowidener** in Kleinbuchstaben platziert.
+* Rechts befinden sich minimalistische Fensterelemente (Minimieren- und Power-Button).
+
+* **Zentraler Hauptbereich (Stereo Widening):**
+* In der Mitte dominiert ein **großer, metallischer Hauptdrehknopf** für die Stereoweite.
+* Um den Knopf herum befindet sich eine blaue Bogen-Anzeige mit Prozentwerten (**0%** links, **100%** rechts und einer digitalen Anzeige des aktuellen Wertes in der Mitte darunter).
+* Ein blauer Leuchtring am Knopf (von 0 bis zum aktuellen Wert) zeigt den aktuellen Wert an.
+* Im oberen Displaybereich befindet sich eine halbkreisförmige **Stereo-Visualisierung** in leuchtendem Neonblau mit den Bezeichnungen **L** (Links) und **R** (Rechts). Das Stereofeld breitet sich gleichmäßig nach außen hin aus.
+* Rechts im Display zeigen zwei vertikale **Level-Meter (L/R)** den Eingangssignal-Pegel an.
+
+* **Unterer Steuerungsbereich:**
+* **Links:** Der Regler für den **LOW FREQUENCY CUT** mit einem kleineren Drehknopf, orange leuchtendem Bogenindikator und Frequenzbereichsskala (20Hz bis 500Hz). Darunter befindet sich ein digitales Wertfeld mit dem aktuell eingestellten Wert.
+* **Rechts:** Der **MONO CHECK** als kompakter Druckbutton mit grün leuchtendem M-Logo und integrierter Status-LED.
+
+Das Gesamtdesign verwendet klare Kontraste in Orange (Low Frequency Cut), Neonblau (Stereowidener) und Grün (Monocheck).
