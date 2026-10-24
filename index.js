@@ -62,7 +62,6 @@ class StereoWidenerView
 
         this.meterRaf = null;
         this.paramListener = null;
-        this._defaultsEnforced = false;
 
         this.element = document.createElement('div');
         this.element.className = 'stereowidener-host';
@@ -72,7 +71,6 @@ class StereoWidenerView
         this._bindEvents();
         this._bindParameters();
         this._renderAll();
-        this._enforceDefaults();
         this._startMeterLoop();
     }
 
@@ -849,17 +847,14 @@ class StereoWidenerView
             if (id === PARAM_WIDTH)
             {
                 this.setWidth(value, false);
-                if (!this._defaultsEnforced) this._enforceDefaults();
             }
             else if (id === PARAM_LOW_CUT)
             {
                 this.setLowCut(value, false);
-                if (!this._defaultsEnforced) this._enforceDefaults();
             }
             else if (id === PARAM_MONO)
             {
                 this.setMono(value > 0.5, false);
-                if (!this._defaultsEnforced) this._enforceDefaults();
             }
         };
 
@@ -877,20 +872,6 @@ class StereoWidenerView
 
     _enforceDefaults()
     {
-        if (this._defaultsEnforced) return;
-        this._defaultsEnforced = true;
-
-        this.setWidth(WIDTH_DEFAULT, true);
-        this.setLowCut(CUT_DEFAULT, true);
-        this.setMono(false, true);
-
-        // Noch einmal nach kurzer Verzögerung erzwingen (gegen Session-Caches)
-        window.setTimeout(() => {
-            if (!this._defaultsEnforced) return;
-            this.setWidth(WIDTH_DEFAULT, true);
-            this.setLowCut(CUT_DEFAULT, true);
-            this.setMono(false, true);
-        }, 50);
     }
 
     _send(id, value)
