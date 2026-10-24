@@ -45,15 +45,46 @@ processor StereoWidenerCoreEngine
     }
     
     FilterState hpL, hpR;
-    
-    // Allpass-Filter Zustand für die Mono-zu-Stereo Verbreiterung
-    float32 apStateR;
+
+    // v4: 257-Tap Blackman-Hilbert FIR auf dem UNVERZÖGERTEN fullMid.
+    // hilbBuf ist ein Shift-Register: hilbBuf[0] = aktuellstes fullMid,
+    // hilbBuf[k] = fullMid von vor k Samples. Die FIR hat eine Gruppenlaufzeit
+    // von M = 128 Samples; hY[n] referenziert damit fullMid[n-128] als Zentrum.
+    float32[257] hilbBuf;
+
+    // 128-Sample-Delay-Ringe (M = (257-1)/2): outMid, loSide und hiSide erhalten
+    // exakt dieselbe Latenz wie die FIR-Gruppengröße. Dadurch referenzieren
+    // outMid und genSide (= Hilbert von fullMid) dieselbe verzögerte Zeitbasis
+    // und sind phasenexakt um 90° versetzt: E[outMid * genSide] = 0, die
+    // L/R-Ausgänge sind bei jeder Breitungseinstellung pegelgleich.
+    float32[128] midBuf;
+    float32[128] loSBuf;
+    float32[128] hiSBuf;
+    wrap<128> di;
+
+    // Antisymmetrische Hilbert-Koeffizienten (nur ungerade k = 1..127,
+    // c_k = (2/(pi*k)) * Blackman-Fenster, 257 Taps). Damit:
+    // hY = sum_i HILB_C[i] * (hilbBuf[129+2i] - hilbBuf[127-2i])
+    // (identisch zur vollen 257-Tap-Faltung, da alle geraden Taps 0 sind)
+    const float32[64] HILB_C = (
+        0.636463777f, 0.211739011f, 0.126546001f, 0.089859367f, 0.069343659f, 0.056180677f, 0.046979267f, 0.040157274f,
+        0.034877407f, 0.030655190f, 0.027190940f, 0.024289400f, 0.021817957f, 0.019683422f, 0.017818418f, 0.016173040f,
+        0.014709545f, 0.013398862f, 0.012218233f, 0.011149584f, 0.010178366f, 0.009292728f, 0.008482902f, 0.007740753f,
+        0.007059436f, 0.006433130f, 0.005856846f, 0.005326259f, 0.004837592f, 0.004387518f, 0.003973077f, 0.003591618f,
+        0.003240749f, 0.002918295f, 0.002622265f, 0.002350824f, 0.002102276f, 0.001875042f, 0.001667646f, 0.001478707f,
+        0.001306925f, 0.001151077f, 0.001010006f, 0.000882624f, 0.000767900f, 0.000664863f, 0.000572594f, 0.000490229f,
+        0.000416954f, 0.000352007f, 0.000294673f, 0.000244286f, 0.000200226f, 0.000161921f, 0.000128843f, 0.000100510f,
+        0.000076482f, 0.000056363f, 0.000039798f, 0.000026473f, 0.000016112f, 0.000008477f, 0.000003365f, 0.000000607f
+    );
 
     void init()
     {
         hpL.x1 = 0.0f; hpL.x2 = 0.0f; hpL.y1 = 0.0f; hpL.y2 = 0.0f;
         hpR.x1 = 0.0f; hpR.x2 = 0.0f; hpR.y1 = 0.0f; hpR.y2 = 0.0f;
-        apStateR = 0.0f;
+        hilbBuf[:] = 0.0f;
+        midBuf[:] = 0.0f;
+        loSBuf[:] = 0.0f;
+        hiSBuf[:] = 0.0f;
     }
 
     void main()
@@ -108,32 +139,63 @@ processor StereoWidenerCoreEngine
             if (loGain > 1.0f)
                 loGain = 1.0f;
 
-            // 6. Mono-zu-Stereo: Oberhalb von 50 % wird ein aus dem Gesamt-Mid
-            //    abgeleitetes, allpass-gefiltertes Side-Signal addiert. Es wird
-            //    symmetrisch auf L (+side) und R (-side) verteilt, sodass es
-            //    bei einer Monosumme exakt herausfällt. Dadurch bleibt die
-            //    Monokompatibilität erhalten und es gibt keine Pegelauslöschung.
-            // Unterhalb von 50 % ist extraWidth negativ - hier darf die
-            // synthetische Breitung aber NICHT aktiv sein, sonst ist 0 %
-            // nicht mehr voll mono. Deshalb auf 0 klemmen.
+            // 6. Mono-zu-Stereo (v4, Hilbert-Orthogonalität): Oberhalb von 50 %
+            //    wird ein aus dem Gesamt-Mid abgeleitetes, mit einer 257-Tap
+            //    Blackman-Hilbert-FIR um 90° phasengedrehtes Side-Signal
+            //    addiert. Es wird symmetrisch auf L (+side) und R (-side)
+            //    verteilt, sodass es bei einer Monosumme exakt herausfällt.
+            //    Damit die L/R-Ausgänge bei jeder Breitungseinstellung
+            //    pegelgleich bleiben, muss das Mid auf dem Ausgang (outMid)
+            //    dieselbe Referenzzeit wie das Hilbert-Side haben: Beide
+            //    beziehen sich auf fullMid[n-128] (M = 128 Samples = FIR-
+            //    Gruppengröße). Phasendifferenz = exakt 90° ->
+            //    E[outMid * genSide] = 0 -> L/R-PEGELGLEICH.
+            //    Der Preis ist eine einheitliche, lineare Latenz von M = 128
+            //    Samples (2.67 ms bei 48 kHz) auf ALLEN Ausgängen bei ALLEN
+            //    Breitungswerten - DAW-kompensierbar. 50 % bleibt Unity:
+            //    outL = inL[n-M], outR = inR[n-M].
+            //    Unterhalb von 50 % ist extraWidth negativ - hier darf die
+            //    synthetische Breitung aber NICHT aktiv sein, sonst ist 0 %
+            //    nicht mehr voll mono. Deshalb auf 0 klemmen.
             float32 extraWidth = hiGain - 1.0f;   // -1 bei 0 %, 0 bei 50 %, 1 bei 100 %
             if (extraWidth < 0.0f)
                 extraWidth = 0.0f;
-            float32 ap_g = 0.6f;
+
             float32 fullMid = 0.5f * (inL + inR);
-            float32 ap_out = -ap_g * fullMid + apStateR;
-            apStateR = fullMid + (ap_g * ap_out);
-            float32 genSide = ap_out * extraWidth * 0.5f;
 
-            // 7. Gesamt-Side je Band = originaler Side * Breitung + synthetische
-            //    Mono-zu-Stereo-Breitung (nur im Hochton-Bereich).
-            float32 totalSide = loSide * loGain + (hiSide * hiGain + genSide);
+            // FIR-Shift-Register aktualisieren: hilbBuf[0] = aktuelles fullMid
+            hilbBuf[1:257] = hilbBuf[0:256];
+            hilbBuf[0] = fullMid;
 
-            // 8. Zurück nach L/R dekodieren (vollständiges Signal, mono-kompatibel)
-            float32 outL = (loMid + hiMid) + totalSide;
-            float32 outR = (loMid + hiMid) - totalSide;
+            // Hilbert-Faltung (antisymmetrische 64-Koeffizienten-Form,
+            // ungerade k = 1..127; alle geraden Taps sind exakt 0)
+            float32 hY = 0.0f;
+            for (int i = 0; i < 64; i++)
+            {
+                hY += HILB_C[i] * (hilbBuf[129 + (2 * i)] - hilbBuf[127 - (2 * i)]);
+            }
 
-            // 9. Mono-Check Schalter einberechnen
+            // 7. Mid und beide Seiten um M = 128 Samples verzögern (ein
+            //    gemeinsamer Ring-Index), damit alle Komponenten auf der
+            //    gleichen verzögerten Zeitbasis referenzieren.
+            di++;
+            float32 outMid  = midBuf[di];
+            float32 loSideD = loSBuf[di];
+            float32 hiSideD = hiSBuf[di];
+            midBuf[di] = fullMid;
+            loSBuf[di] = loSide;
+            hiSBuf[di] = hiSide;
+
+            // 8. Gesamt-Side je Band = originaler Side * Breitung + synthetische
+            //    Mono-zu-Stereo-Breitung (Hilbert-orthogonal zum verzögerten Mid).
+            float32 genSide = hY * extraWidth * 0.5f;
+            float32 totalSide = loSideD * loGain + (hiSideD * hiGain + genSide);
+
+            // 9. Zurück nach L/R dekodieren (vollständiges Signal, mono-kompatibel)
+            float32 outL = outMid + totalSide;
+            float32 outR = outMid - totalSide;
+
+            // 10. Mono-Check Schalter einberechnen
             if (monoCheck > 0.5f)
             {
                 float32 monoSum = 0.5f * (outL + outR);
@@ -141,7 +203,7 @@ processor StereoWidenerCoreEngine
                 outR = monoSum;
             }
 
-            // 10. Stream-Zuweisungsoperator (<-) für den Stereo-Ausgang
+            // 11. Stream-Zuweisungsoperator (<-) für den Stereo-Ausgang
             out <- float32<2>(outL, outR);
             
             advance();

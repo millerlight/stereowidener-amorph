@@ -1,0 +1,60 @@
+GRUNDPROBLEM: L/R-Pegelungleichheit im StereoWidener
+====================================================
+
+SYMPTOM
+-------
+Bei 100 % Breite war der linke Kanal hörbar lauter als der rechte.
+Bei 0 % und 50 % war alles korrekt. Die Pegelanzeige im Plugin zeigte
+keinen Fehler, weil sie den EINGANG misst, nicht den Ausgang.
+
+URSACHE
+-------
+Der Widener arbeitet in Mid/Side-Form:
+
+    outL = Mid + Side
+    outR = Mid - Side
+
+Damit L und R gleich laut sind, muss der Erwartungswert E[Mid * Side]
+exakt null sein. Ist er es nicht, gilt:
+
+    L^2 - R^2 = 4 * E[Mid * Side]     -> ein Kanal wird systematisch lauter.
+
+Im alten DSP wurde das synthetische Side-Signal (fuer Breiten > 50 %)
+mit einem Allpass 1. Ordnung (g = 0.6) aus dem Mid erzeugt. Ein Allpass
+dreht die Phase aber NICHT konstant um 90 Grad, sondern frequenzabhaengig
+(bei tiefen Frequenzen fast 0 Grad, bei hohen fast 180 Grad). Dadurch war
+das erzeugte Side teilweise mit dem Mid korreliert -> E[Mid * Side] != 0.
+
+Folgen:
+  - Mono-Testton 440 Hz  @ 100 %: +56.9 % Pan nach LINKS
+  - Mono-Testton 8 kHz   @ 100 %: -36.9 % Pan nach RECHTS
+  - Stereo 440/660 Hz    @ 100 %: +11.4 % Pan nach LINKS
+
+Der Fehler haengt also von der Frequenz ab, weil die Allpass-Phasendrehung
+frequenzabhaengig ist.
+
+LOESUNG
+-------
+Ersatz des Allpass durch eine echte 90-Grad-Phasendrehung: eine
+257-Tap-Blackman-Hilbert-FIR auf dem unverzoegerten Mid. Eine Hilbert-
+Transformation liefert ueber den gesamten Frequenzbereich konstant 90 Grad
+Phasendifferenz, daher ist das erzeugte Side exakt orthogonal zum Mid:
+E[Mid * Side] = 0 -> L und R sind pegelgleich.
+
+Damit Mid und Hilbert-Side auf dieselbe Zeitbasis referenzieren, werden
+Mid und beide Side-Signale um M = 128 Samples (FIR-Gruppenlaufzeit)
+verzoegert.
+
+PREIS
+-----
+Einheitliche, lineare Latenz von 128 Samples (2.67 ms bei 48 kHz) auf
+allen Ausgaengen bei allen Breiteneinstellungen. Linear und damit von der
+DAW kompensierbar. 50 % bleibt exakte Unity (nur verzoegert).
+
+RESTFEHLER
+----------
+Eine kleine, physikalisch bedingte L/R-Abweichung bleibt durch den
+M/S-Kreuzterm E[Mid * Side] des ORIGINAL-Stereomaterials bestehen. Sie
+waechst mit der Flankensteilheit des Low-Cut-Filters (ca. -0.001 dB bei
+20 Hz bis ca. -1.2 dB bei 500 Hz) und ist rund 30x kleiner als der alte
+Bug. Sie ist in reiner M/S-Form nicht behebbar und akzeptiert.

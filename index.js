@@ -678,7 +678,7 @@ class StereoWidenerView
         </div>
 
         <div class="meter-panel">
-            <div class="meter-title">INPUT</div>
+            <div class="meter-title">OUTPUT</div>
             <div class="meter-container">
                 <div class="meter-bar-track"><div class="meter-fill" id="meter-l"></div></div>
                 <div class="meter-bar-track"><div class="meter-fill" id="meter-r"></div></div>
@@ -1001,8 +1001,8 @@ class StereoWidenerView
 
             if (this.element.isConnected && levels)
             {
-                const left = levels.inL !== undefined ? levels.inL : levels.outL;
-                const right = levels.inR !== undefined ? levels.inR : levels.outR;
+                const left = levels.outL !== undefined ? levels.outL : levels.inL;
+                const right = levels.outR !== undefined ? levels.outR : levels.inR;
 
                 this.meterL.style.height = `${(toNormalized(left) * 100).toFixed(1)}%`;
                 this.meterR.style.height = `${(toNormalized(right) * 100).toFixed(1)}%`;
